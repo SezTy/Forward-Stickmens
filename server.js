@@ -1,7 +1,7 @@
 // Serveur : node server.js  (npm i ws)   — le client est dans public/index.html
 const http = require('http'), fs = require('fs'), path = require('path');
 const { WebSocketServer } = require('ws');
-const PORT = process.env.PORT || 3000;
+const PORT = process.env.PORT || 2010;
 const MAXP = 8, MINP = 2;                 // joueurs max / min pour lancer
 const LEN = 240, IN = 22, GOAL = 4000;    // longueur plateforme, marge des stickmen, distance arrivée
 const FLOOR = 210, CEIL = -250;           // sol et plafond du couloir
