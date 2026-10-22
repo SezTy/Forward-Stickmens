@@ -1,2 +1,13 @@
 # Forward-Stickmens
 A team-based game featuring stickmen, produced for the Cripie Club
+
+
+## Licence et droits d'auteur
+
+Copyright © 2026 SezTy. Tous droits réservés.
+
+Ce dépôt est rendu public à des fins de consultation et de transparence uniquement.
+
+Aucune autorisation n'est accordée pour utiliser, copier, modifier, distribuer, reproduire ou exploiter tout ou partie de ce code sans l'autorisation écrite préalable de son titulaire des droits.
+
+Toute utilisation autre que la consultation autorisée par les conditions de GitHub ou par la loi applicable nécessite une autorisation préalable.
