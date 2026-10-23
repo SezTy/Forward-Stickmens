@@ -5,7 +5,8 @@ const PORT = process.env.PORT || 2010;
 const MAXP = 8, MINP = 2;                 // joueurs max / min pour lancer
 const LEN = 240, IN = 22, GOAL = 4000;    // longueur plateforme, marge des stickmen, distance arrivée
 const FLOOR = 210, CEIL = -250;           // sol et plafond du couloir
-const ACC = 220, FR = 0.95, DT = 1 / 30;  // poussée par joueur, frottement, pas de temps
+const ACC = 220, DT = 1 / 60;             // poussée par joueur, pas de temps (60 Hz)
+const K30 = 30 * DT, FR = Math.pow(0.95, K30); // frottements réglés pour 30 Hz, ramenés au pas courant
 const GRAV = 105;                         // gravité : sans poussée vers le haut, la plateforme tombe
 const WACC = 150;                         // force maximale d'une rafale
 const WDIRS = [0, 0, Math.PI, -Math.PI / 2, -Math.PI / 4, Math.PI / 6, -3 * Math.PI / 4]; // directions possibles du vent
@@ -24,8 +25,8 @@ const wss = new WebSocketServer({ server });
 const rooms = new Map();
 let nid = 1;
 
-const send = (p, m) => p.ws.readyState === 1 && p.ws.send(JSON.stringify(m));
-const bcast = (r, m) => r.players.forEach(p => send(p, m));
+const send = (p, m) => p.ws.readyState === 1 && p.ws.send(typeof m === 'string' ? m : JSON.stringify(m));
+const bcast = (r, m) => { const j = JSON.stringify(m); r.players.forEach(p => send(p, j)); };  // un seul JSON.stringify par diffusion
 const pub = r => r.players.map(p => ({ id: p.id, name: p.name, color: p.color }));
 const lobby = r => bcast(r, { k: 'lobby', code: r.code, host: r.players[0].id, playing: !!r.g, players: pub(r) });
 // Directions (y positif = vers le bas) : éventail de -100° (presque tout droit vers le haut) à +10° (vers l'avant).
@@ -37,7 +38,8 @@ const dirs = n => n < 2 ? [-Math.PI / 2]
 const slot = (i, n) => (n < 2 ? 0 : -LEN / 2 + IN + i * (LEN - 2 * IN) / (n - 1)) + 4;
 const side = a => Math.cos(a) >= 0 ? 1 : -1;
 
-wss.on('connection', ws => {
+wss.on('connection', (ws, req) => {
+  if (req.socket && req.socket.setNoDelay) req.socket.setNoDelay(true);   // pas d'attente de l'algorithme de Nagle : moins de latence
   const me = { id: nid++, ws, name: '', color: '', room: null };
   ws.on('message', raw => {
     let m; try { m = JSON.parse(raw); } catch { return; }
@@ -139,10 +141,17 @@ function start(r) {
     balls: [], en: { x: ENX, y: FLOOR - 70, a: Math.PI, f: 9, cs: 2.2, thr: .2, kind: 0, ch: -1 } };
   plan(g); r.g = g;
   bcast(r, { k: 'start', players: pub(r), a: g.a, items: items.map(i => [i.x, i.y, i.ty]), GOAL, LEN, IN, FLOOR, CEIL, intro });
-  g.iv = setTimeout(() => { g.go = true; g.iv = setInterval(() => tick(r), DT * 1000); }, intro);
+  g.iv = setTimeout(() => {
+    g.go = true; let last = performance.now(), acc = 0;
+    // pas de temps fixe (60 Hz) avec rattrapage ; un seul envoi par lot de pas
+    g.iv = setInterval(() => {
+      const now = performance.now(); acc = Math.min(acc + (now - last) / 1000, .25); last = now;
+      while (acc >= DT) { acc -= DT; if (tick(r, acc < DT)) return; }
+    }, 8);
+  }, intro);
 }
 
-function tick(r) {
+function tick(r, snap) {
   const g = r.g, n = g.n, F = v => +v.toFixed(1), ev = g.ev = []; let fx = 0, fy = GRAV;
   const boost = g.t < g.turbo ? 1.6 : 1;
   // Intentions : ESPACE sur son pad = pousser ; ailleurs (plateforme ou sol) = sauter
@@ -172,7 +181,7 @@ function tick(r) {
   if (g.y < CEIL) { g.y = CEIL; g.vy *= -0.3; }
   const gy = FLOOR - 12, ground = g.y >= gy - 0.5;
   if (g.y > gy) { g.y = gy; g.vy = 0; }
-  if (ground) g.vx *= 0.96;                       // frottement au sol
+  if (ground) g.vx *= Math.pow(0.96, K30);                       // frottement au sol
   // Stickmen : portés par la plateforme, ou libres (chute, saut, marche au sol)
   const dx = g.x - x0, sf = g.y - 16;
   for (let i = 0; i < n; i++) {
@@ -182,7 +191,7 @@ function tick(r) {
     x += g.el[i] * MV * DT;
     if (g.st[i] && Math.abs(x - g.x) > LEN / 2) { g.st[i] = false; g.wv[i] = 0; g.wvx[i] = g.vx; } // il passe le bord : il tombe
     if (!g.st[i]) {
-      g.wv[i] += GJ * DT; y += g.wv[i] * DT; x += g.wvx[i] * DT; g.wvx[i] *= 0.985;
+      g.wv[i] += GJ * DT; y += g.wv[i] * DT; x += g.wvx[i] * DT; g.wvx[i] *= Math.pow(0.985, K30);
       if (g.wv[i] >= 0 && Math.abs(x - g.x) <= LEN / 2 && y >= sf && y - sf <= Math.max(8, g.wv[i] * DT * 2 + 6 + Math.max(0, g.vy * DT))) { y = sf; g.wv[i] = 0; g.st[i] = true; }
       else if (y >= FLOOR) { y = FLOOR; g.wv[i] = 0; g.wvx[i] = 0; }
       else if (y > g.y - 5 && y - 36 < g.y + 11 && Math.abs(x - g.x) < LEN / 2 + 7) x = x < g.x ? g.x - LEN / 2 - 7 : g.x + LEN / 2 + 7; // la plateforme est solide par les côtés
@@ -209,8 +218,8 @@ function tick(r) {
   }
   // Plateforme ennemie (automatique) : le canon se charge du vert à l'orange puis au rouge ; il tire quand il veut
   const en = g.en;
-  en.x += (g.x + ENX - en.x) * 0.1;
-  en.y += Math.max(-4, Math.min(4, (Math.max(CEIL + 30, Math.min(FLOOR - 12, g.y - 20 + Math.sin(g.t * .7) * 80)) - en.y) * 0.05));
+  en.x += (g.x + ENX - en.x) * (1 - Math.pow(0.9, K30));
+  en.y += Math.max(-4 * K30, Math.min(4 * K30, (Math.max(CEIL + 30, Math.min(FLOOR - 12, g.y - 20 + Math.sin(g.t * .7) * 80)) - en.y) * (1 - Math.pow(0.95, K30))));
   en.f += DT;
   const dur = Math.max(.9, 3.2 - g.t * .04), gap = Math.max(.5, 2.4 - g.t * .03);
   en.ch = g.t < en.cs ? -1 : Math.min(1, (g.t - en.cs) / dur);
@@ -248,17 +257,20 @@ function tick(r) {
   const ok = ground && Math.abs(g.x - GOAL) < 80 && Math.hypot(g.vx, g.vy) < 35;
   g.gt = ok ? g.gt + DT : Math.max(0, g.gt - DT);
   const left = g.alive.some(Boolean);
-  bcast(r, { k: 's', t: +g.t.toFixed(2), x: F(g.x), y: F(g.y), vx: F(g.vx), vy: F(g.vy), al: g.alive.map(Number), pr: g.press.map(Number),
+  const over = g.gt >= 1.5 || !left;
+  if (snap || over) bcast(r, { k: 's', t: +g.t.toFixed(2), x: F(g.x), y: F(g.y), vx: F(g.vx), vy: F(g.vy), al: g.alive.map(Number), pr: g.press.map(Number),
     gt: +g.gt.toFixed(2),
     pl: g.wx.map((x, i) => g.st[i] ? [F(x - g.x), 0, g.el[i], 1, 0] : [F(x), F(g.wy[i]), g.el[i], 0, Math.round(g.wvx[i])]),
     sh: g.sh.map(Number), pz: g.par.map(p => +Math.max(0, p - g.t).toFixed(1)), tb: +Math.max(0, g.turbo - g.t).toFixed(1), ic: g.items.map(i => i.on ? 1 : 0).join(''), ev,
     b: g.balls.map(b => [Math.round(b.x), Math.round(b.y), Math.round(b.vx), Math.round(b.vy), b.k]), en: [F(en.x), F(en.y), +en.a.toFixed(2), +en.f.toFixed(2), +en.ch.toFixed(2), en.kind],
     wa: w.a, wk: +wk.toFixed(2), ww: +ww.toFixed(2) });
-  if (g.gt >= 1.5 || !left) {
+  if (over) {
     clearInterval(g.iv);
     bcast(r, { k: 'end', win: left, t: +g.t.toFixed(1), al: g.alive.map(Number), back: BACK });
     setTimeout(() => { if (rooms.get(r.code) === r) { r.g = null; if (r.players.length) lobby(r); } }, BACK);
+    return true;
   }
+  return false;
 }
 
 server.listen(PORT, () => console.log('http://localhost:' + PORT));
