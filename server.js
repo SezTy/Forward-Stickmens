@@ -11,6 +11,7 @@ const WACC = 150;                         // force maximale d'une rafale
 const WDIRS = [0, 0, Math.PI, -Math.PI / 2, -Math.PI / 4, Math.PI / 6, -3 * Math.PI / 4]; // directions possibles du vent
 const MV = 110, JV = 300, GJ = 900;        // vitesse de marche, impulsion de saut, gravité du saut (stickmen)
 const BR = 9, ENX = 380;                  // rayon des boulets, distance de la plateforme ennemie
+const LEVR = 15, PZ = 2.5;                // rayon d'action du levier (px), durée de paralysie (s)
 const BG = 140, KS = 1.3;                 // gravité des boulets (sauf rouges) ; pente de l'exponentielle vitesse / charge                  // rayon des boulets, distance de la plateforme ennemie
 const BACK = 8000;                        // délai avant retour au salon (ms)
 const COLORS = ['#e6194b', '#3cb44b', '#4363d8', '#f58231', '#911eb4', '#0cb7c9', '#f032e6', '#c8c800'];
@@ -92,7 +93,7 @@ function solve(v, D, h) { // angle de tir (haut positif) pour atteindre (D, h) a
 function fire(g, ch) {
   const en = g.en, live = g.alive.map((a, i) => a ? i : -1).filter(i => i >= 0);
   if (!live.length) return;
-  const mx = en.x - 152, my = en.y - 29, T = i => [g.wx[i], g.wy[i] - 18];
+  const mx = en.x - 132, my = en.y - 27, T = i => [g.wx[i], g.wy[i] - 18];
   const purple = en.kind === 1, red = !purple && ch >= .97;
   const v = purple ? Math.min(300, 190 + g.t * 1.6) : Math.min(560, 420 + g.t * 2.5) * Math.exp(-KS * (1 - ch));
   const i = live[Math.random() * live.length | 0]; let vx, vy;
@@ -134,7 +135,7 @@ function start(r) {
     x: 0, y: FLOOR - 12, vx: 0, vy: 0, t: 0, gt: 0, go: false, w: { a: null, s: 0, e: 0, next: 6 },
     wx: a.map((d, i) => slot(i, n) - 12 * side(d)), wy: Array(n).fill(FLOOR - 28), wv: Array(n).fill(0), wvx: Array(n).fill(0), st: Array(n).fill(true),
     sh: Array(n).fill(false), turbo: 0, items, ev: [],
-    in: Array.from({ length: n }, () => ({ l: 0, sp: false })), psp: Array(n).fill(false),
+    in: Array.from({ length: n }, () => ({ l: 0, sp: false })), el: Array(n).fill(0), par: Array(n).fill(0), psp: Array(n).fill(false),
     balls: [], en: { x: ENX, y: FLOOR - 70, a: Math.PI, f: 9, cs: 2.2, thr: .2, kind: 0, ch: -1 } };
   plan(g); r.g = g;
   bcast(r, { k: 'start', players: pub(r), a: g.a, items: items.map(i => [i.x, i.y, i.ty]), GOAL, LEN, IN, FLOOR, CEIL, intro });
@@ -147,10 +148,11 @@ function tick(r) {
   // Intentions : ESPACE sur son pad = pousser ; ailleurs (plateforme ou sol) = sauter
   for (let i = 0; i < n; i++) {
     if (!g.alive[i]) { g.press[i] = false; continue; }
-    const inp = g.in[i], stx = slot(i, n) - 12 * side(g.a[i]);
-    const onLev = g.st[i] && Math.abs(g.wx[i] - g.x - stx) < 8, grounded = !g.st[i] && g.wy[i] >= FLOOR - 0.5;
+    const rin = g.in[i], paralyzed = g.t < g.par[i], inp = paralyzed ? { l: 0, sp: false } : rin, stx = slot(i, n) - 12 * side(g.a[i]);
+    g.el[i] = inp.l;
+    const onLev = g.st[i] && Math.abs(g.wx[i] - g.x - stx) < LEVR, grounded = !g.st[i] && g.wy[i] >= FLOOR - 0.5;
     if (inp.sp && !g.psp[i] && (grounded || (g.st[i] && !onLev))) { g.wv[i] = -JV; g.wvx[i] = g.st[i] ? g.vx : 0; g.st[i] = false; }
-    g.psp[i] = inp.sp;
+    g.psp[i] = rin.sp;
     g.press[i] = inp.sp && onLev;
     if (g.press[i]) { fx += Math.cos(g.a[i]) * ACC * boost; fy += Math.sin(g.a[i]) * ACC * boost; }
   }
@@ -177,7 +179,7 @@ function tick(r) {
     if (!g.alive[i]) continue;
     let x = g.wx[i], y = g.wy[i];
     if (g.st[i]) { x += dx; y = sf; }
-    x += g.in[i].l * MV * DT;
+    x += g.el[i] * MV * DT;
     if (g.st[i] && Math.abs(x - g.x) > LEN / 2) { g.st[i] = false; g.wv[i] = 0; g.wvx[i] = g.vx; } // il passe le bord : il tombe
     if (!g.st[i]) {
       g.wv[i] += GJ * DT; y += g.wv[i] * DT; x += g.wvx[i] * DT; g.wvx[i] *= 0.985;
@@ -200,7 +202,7 @@ function tick(r) {
       else {
         const d = g.alive.indexOf(false);
         if (d < 0) g.sh[i] = true;
-        else { g.alive[d] = true; g.st[d] = true; g.wx[d] = g.x + slot(d, n) - 12 * side(g.a[d]); g.wy[d] = g.y - 16; g.wv[d] = 0; g.sh[d] = false; ev.push([5, g.wx[d], g.wy[d] - 18]); }
+        else { g.alive[d] = true; g.par[d] = 0; g.st[d] = true; g.wx[d] = g.x + slot(d, n) - 12 * side(g.a[d]); g.wy[d] = g.y - 16; g.wv[d] = 0; g.sh[d] = false; ev.push([5, g.wx[d], g.wy[d] - 18]); }
       }
       break;
     }
@@ -223,12 +225,13 @@ function tick(r) {
         b.side *= -1; b.hx = Math.cos(h) * b.sp; b.hy = Math.sin(h) * b.sp; b.tz = g.t + .22 + Math.random() * .3;
       }
       b.vx += (b.hx - b.vx) * Math.min(1, DT * 9); b.vy += (b.hy - b.vy) * Math.min(1, DT * 9);
-      if (b.age > 8) return false;
+      if (b.age > 8 || b.x < g.x - 200) return false;          // disparaît en passant le bord gauche de l'écran
+      b.y = Math.min(b.y, FLOOR - 6);
     } else if (b.gr) b.vy += BG * DT;
     b.x += b.vx * DT; b.y += b.vy * DT;
     if (b.x < g.x - 700 || b.x > g.x + 900 || b.y < -700) return false;
-    if (b.y > FLOOR - 4) { ev.push([2, b.x, FLOOR]); return false; }  // le boulet touche le sol
-    if (Math.abs(b.x - g.x) < LEN / 2 + BR && Math.abs(b.y - g.y) < 11 + BR) { g.vx -= 55; return false; } // choc contre la plateforme
+    if (b.k <= 100 && b.y > FLOOR - 4) { ev.push([2, b.x, FLOOR]); return false; }  // le boulet touche le sol
+    if (b.k <= 100 && Math.abs(b.x - g.x) < LEN / 2 + BR && Math.abs(b.y - g.y) < 11 + BR) { g.vx -= 55; return false; } // choc contre la plateforme
     for (let i = 0; i < n; i++) {
       if (!g.alive[i]) continue;
       const sx = g.wx[i], fyy = g.wy[i];
@@ -236,6 +239,7 @@ function tick(r) {
       if (Math.hypot(b.x - cx, b.y - cy) >= BR) continue;
       if (g.sh[i]) { g.sh[i] = false; ev.push([3, b.x, b.y]); return false; }
       if (!g.st[i] && g.wv[i] > 20 && fyy <= b.y + 2) { g.wv[i] = -230; ev.push([2, b.x, b.y]); return false; } // écrasé : le boulet disparaît, le stickman rebondit
+      if (b.k > 100) { g.par[i] = g.t + PZ; ev.push([6, sx, fyy - 18]); return false; }   // boulet magique : paralyse au lieu de tuer
       g.alive[i] = false; ev.push([4, sx, fyy - 18]); return false;
     }
     return true;
@@ -246,8 +250,8 @@ function tick(r) {
   const left = g.alive.some(Boolean);
   bcast(r, { k: 's', t: +g.t.toFixed(2), x: F(g.x), y: F(g.y), vx: F(g.vx), vy: F(g.vy), al: g.alive.map(Number), pr: g.press.map(Number),
     gt: +g.gt.toFixed(2),
-    pl: g.wx.map((x, i) => g.st[i] ? [F(x - g.x), 0, g.in[i].l, 1, 0] : [F(x), F(g.wy[i]), g.in[i].l, 0, Math.round(g.wvx[i])]),
-    sh: g.sh.map(Number), tb: +Math.max(0, g.turbo - g.t).toFixed(1), ic: g.items.map(i => i.on ? 1 : 0).join(''), ev,
+    pl: g.wx.map((x, i) => g.st[i] ? [F(x - g.x), 0, g.el[i], 1, 0] : [F(x), F(g.wy[i]), g.el[i], 0, Math.round(g.wvx[i])]),
+    sh: g.sh.map(Number), pz: g.par.map(p => +Math.max(0, p - g.t).toFixed(1)), tb: +Math.max(0, g.turbo - g.t).toFixed(1), ic: g.items.map(i => i.on ? 1 : 0).join(''), ev,
     b: g.balls.map(b => [Math.round(b.x), Math.round(b.y), Math.round(b.vx), Math.round(b.vy), b.k]), en: [F(en.x), F(en.y), +en.a.toFixed(2), +en.f.toFixed(2), +en.ch.toFixed(2), en.kind],
     wa: w.a, wk: +wk.toFixed(2), ww: +ww.toFixed(2) });
   if (g.gt >= 1.5 || !left) {
